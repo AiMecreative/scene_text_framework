@@ -1,0 +1,10 @@
+# @package _global_
+data:
+  train: [
+    MJSynth90k/MJSynth90k-lmdb/train,
+    # MJSynth90k/MJSynth90k-lmdb/val,
+    # MJSynth90k/MJSynth90k-lmdb/test,
+    # SynthText/SynthText-lmdb/train,
+    # SynthText/SynthText-lmdb/val,
+    # SynthText/SynthText-lmdb/test,
+  ]

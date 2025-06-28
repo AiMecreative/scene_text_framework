@@ -1,0 +1,5 @@
+# @package _global_
+data:
+  test: [
+    MJSynth90k/MJSynth90k-lmdb/train,
+  ]

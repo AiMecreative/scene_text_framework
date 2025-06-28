@@ -1,0 +1,4 @@
+# @package _global_
+data:
+  train_charset: 0123456789abcdefghijklmnopqrstuvwxyz
+  test_charset: 0123456789abcdefghijklmnopqrstuvwxyz

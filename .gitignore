@@ -1,0 +1,9 @@
+__pycache__/
+checkpoints/
+scripts/
+inferece_results/
+logs/
+_**_/
+
+train.py
+main.yaml

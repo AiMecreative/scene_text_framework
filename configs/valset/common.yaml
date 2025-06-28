@@ -1,0 +1,18 @@
+# @package _global_
+data:
+  val: [
+    IIIT5k/val,
+    IIIT5k/test,
+    COCO/train,
+    COCO/val,
+    COCO/test,
+    CUTE80/test,
+    IC13/IC13_1015/test,
+    IC13/IC13_1095/test,
+    IC13/IC13_857/test,
+    IC15/IC15_1811/test,
+    IC15/IC15_2077/test,
+    SVT/val,
+    SVT/test,
+    SVTP/test,
+  ]

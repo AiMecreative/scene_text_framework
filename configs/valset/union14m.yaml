@@ -1,0 +1,11 @@
+# @package _global_
+data:
+  val: [
+    Union14M-Benchmarks/Union14M-Benchmarks-lmdb/artistic,
+    Union14M-Benchmarks/Union14M-Benchmarks-lmdb/contextless,
+    Union14M-Benchmarks/Union14M-Benchmarks-lmdb/curve,
+    Union14M-Benchmarks/Union14M-Benchmarks-lmdb/general,
+    Union14M-Benchmarks/Union14M-Benchmarks-lmdb/multi_oriented,
+    Union14M-Benchmarks/Union14M-Benchmarks-lmdb/multi_words,
+    Union14M-Benchmarks/Union14M-Benchmarks-lmdb/salient,
+  ]

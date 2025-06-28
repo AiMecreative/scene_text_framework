@@ -1,0 +1,66 @@
+defaults:
+ - _self_
+ - model: parseq
+ - charset: char_36
+ - trainset: trainedit
+ - valset: common
+ - testset: union14m
+
+max_label_length: 25
+image_size: [32, 128]
+data_root: /home/fangj/mecreative/datasets
+
+trainer:
+  _target_: configs.types.TrainerConfigs
+  _recursive_: false
+  ngpu: 1
+  num_epochs: 100
+  init_lr: 5e-5
+  loss_type: model_loss
+  save_dir: checkpoints
+  log_dir: logs
+
+data:
+  _target_: configs.types.DataModuleConfigs
+  _recursive_: true
+  root: ${data_root}
+  train_charset: ???
+  test_charset: ???
+  image_size: ${image_size}
+  cache_file: data/_cache_
+  max_label_length: ${max_label_length}
+  max_image_h: 1024
+  max_image_w: 1024
+  min_label_length: 1
+  min_image_h: 1
+  min_image_w: 1
+  refresh_cache: false
+
+  scene_text_extra:
+    _target_: configs.types._SceneTextExtraConfigs
+    color_augment: true
+    geometry_augment: true
+  
+  scene_text_edit_extra:
+    _target_: configs.types._SceneTextEditExtraConfigs
+    font_dir: data/fonts
+    edit_prob: 1.0
+    edit_types: ["removal", "substitution", "insertion"]
+    edit_times: [1, 3]
+  
+  dataloader:
+    _target_: configs.types.DataLoaderConfigs
+    num_workers: 4
+    batch_size: 32
+
+  train: ???
+  val: ???
+  test: ???
+
+
+hydra:
+  run:
+    dir: ${trainer.log_dir}/log-${hydra.job.override_dirname}/${now:%m-%d-%H-%M-%S}
+  sweep:
+    dir: ${trainer.log_dir}/log-${hydra.job.override_dirname}
+    subdir: ${now:%m-%d-%H-%M-%S}

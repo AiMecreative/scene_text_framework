@@ -1,0 +1,10 @@
+# @package _global_
+data:
+  val: [
+    ArT/train,
+    ArT/val,
+    ArT/test,
+    Uber/train,
+    Uber/val,
+    Uber/test,
+  ]
