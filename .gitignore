@@ -4,6 +4,7 @@ scripts/
 inferece_results/
 logs/
 _**_/
+fonts/
 
 train.py
 main.yaml
