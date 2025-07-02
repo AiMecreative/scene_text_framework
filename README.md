@@ -9,3 +9,11 @@ A lightweight training/evaluation framework for scene text tasks.
 3. If `CTCLoss` can not satisfy the training object, add new criterions in `arch/criterion.py`
 4. If `Accuracy` can not satisfy the evaluating phase, add new metrics in `arch/validator.py`
 5. We have provided the demo of `SVTR`, thanks for the repo [SVTR Pytoch](https://github.com/j-river/svtr-pytorch)
+
+
+## TODO
+
+This repo is still on progress, welcome to fork/PR. Here is the future properties we want to develop.
+
+- [ ] Contrastive pipeline
+- [ ] More flexible stylization
