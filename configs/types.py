@@ -1,6 +1,10 @@
 from typing import Literal, Iterable
 from dataclasses import dataclass
 
+# ----------------------------------------- #
+# DataModule Start                          #
+# ----------------------------------------- #
+
 
 @dataclass
 class _SceneTextExtraConfigs:
@@ -47,6 +51,40 @@ class DataModuleConfigs:
     scene_text_extra: _SceneTextExtraConfigs
     scene_text_edit_extra: _SceneTextEditExtraConfigs
     dataloader: DataLoaderConfigs
+
+
+# ----------------------------------------- #
+# DataModule End                            #
+# ----------------------------------------- #
+
+
+# ----------------------------------------- #
+# ModelModule Start                         #
+# ----------------------------------------- #
+
+
+@dataclass
+class ModelAdapterConfigs:
+
+    contrastive: bool
+
+
+@dataclass
+class _ModelModuleConfigs:
+
+    contrastive: bool
+    adapter: ModelAdapterConfigs
+
+
+@dataclass
+class ModelModuleConfigs(_ModelModuleConfigs):
+
+    pass
+
+
+# ----------------------------------------- #
+# ModelModule End                           #
+# ----------------------------------------- #
 
 
 @dataclass

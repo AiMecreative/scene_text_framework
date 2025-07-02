@@ -12,7 +12,8 @@ import torchvision.transforms.functional as T
 from PIL import Image
 from pathlib import Path
 from tqdm import tqdm
-from typing import Any, Literal, Iterable
+from torch.optim.optimizer import Optimizer
+from typing import Any, Literal, Iterable, Union
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import ConcatDataset, DataLoader, Dataset
 from torchvision.utils import save_image
@@ -31,7 +32,9 @@ else:
 
 from configs.types import TrainerConfigs
 from arch.data_module import DataModule
-from arch.loss_module import LossModule
+from arch.criterion import STRCriterion
+from arch.validator import STRValidator
+from arch.model_module import ModelModule, CheckpointKeywords
 from utils.loggers import get_text_logger, get_train_logger
 from utils.charset_adapter import CharsetAdapter
 
@@ -63,37 +66,44 @@ class Trainer:
     @torch.no_grad()
     def _record_scalar(self, name: str, value: float, step: int):
         if self.enable_log:
-            pass
-
-    def _to_device(self, inputs: tuple) -> tuple:
-        return inputs
+            self.writer.add_scalar(tag=name, scalar_value=value, global_step=step)
 
     def _finish_train(self):
         self.writer.close()
 
-    def _train_batch(model: nn.Module, train_batch: tuple[Any], criterion) -> float:
-        with cuda_autocast:
-            outputs = model.train(train_batch)
-        # CTC loss must be float32 for numerical stability
-        loss = criterion(outputs)
-        return loss
-
-    @torch.inference_mode()
-    def _val_batch(model: nn.Module, val_batch: tuple[Any], val_criterion) -> float:
-        outputs = model.val(val_batch)
-        metric = val_criterion(outputs)
+    def _train_batch(model: ModelModule, train_batch: tuple[Any], criterion: STRCriterion) -> torch.Tensor:
+        """
+        Returned metric is the loss value
+        """
+        with cuda_autocast():
+            outputs = model.train_batch(train_batch)
+            train_batch = model.unzip_train_batch(train_batch)
+            metric = criterion.compute_loss(outputs, train_batch)
         return metric
 
-    @torch.no_grad()
-    def _save_checkpoint(self, file_path, model, optimizer, scaler, epoch, metric_name, metric):
+    @torch.inference_mode()
+    def _val_batch(model: ModelModule, val_batch: tuple[Any], validator: STRValidator):
+        outputs = model.val_batch(val_batch)
+        val_batch = model.unzip_val_batch(val_batch)
+        metric = validator.compute_metric(outputs, val_batch)
+        return metric
+
+    def _save_checkpoint(
+        self,
+        file_path: Union[Path, str],
+        model: ModelModule,
+        optimizer: Optimizer,
+        scaler: GradScaler,
+        epoch: int,
+    ):
         if not self.enable_log:
             return
         torch.save(
             {
-                "epoch": epoch,
-                "model_state": model.module.state_dict() if self.ngpu > 1 else model.state_dict(),
-                "optimizer_state": optimizer.state_dict(),
-                "scaler_state": scaler.state_dict(),
+                CheckpointKeywords.EPOCH: epoch,
+                CheckpointKeywords.MODEL: model.model_state_dict,
+                CheckpointKeywords.EPOCH: optimizer.state_dict(),
+                CheckpointKeywords.SCALER: scaler.state_dict(),
             },
             file_path,
         )
@@ -102,7 +112,8 @@ class Trainer:
     def _save_topk(
         self,
         top_models: list[tuple[float, int, Path]],
-        accuracy: float,
+        metric_name: str,
+        metric_scalar: float,
         epoch_count: int,
         model: nn.Module,
         optimizer,
@@ -110,63 +121,61 @@ class Trainer:
         topk: int = 3,
     ):
         self._save_checkpoint(
-            self.save_dir / "lastest.pth", model, optimizer, scaler, epoch_count, "accuracy", accuracy
+            self.save_dir / "lastest.pth",
+            model,
+            optimizer,
+            scaler,
+            epoch_count,
         )
-        file_path = self.save_dir / f"checkpoint-epoch-{epoch_count}-accuracy-{accuracy:.4f}.pth"
+        file_path = self.save_dir / f"checkpoint-epoch-{epoch_count}-{metric_name}-{metric_scalar:.4f}.pth"
         if len(top_models) < topk:
-            heapq.heappush(top_models, (accuracy, epoch_count + 1, file_path))
+            heapq.heappush(top_models, (metric_scalar, epoch_count, file_path))
             self._save_checkpoint(file_path, model, optimizer, scaler, epoch_count)
         else:
-            if accuracy > top_models[0][0]:
-                removed_acc, removed_epoch, removed_path = heapq.heappop(top_models)
+            if metric_scalar > top_models[0][0]:
+                removed_metric, removed_epoch, removed_path = heapq.heappop(top_models)
                 if os.path.exists(removed_path):
                     os.remove(removed_path)
-                heapq.heappush(top_models, (accuracy, epoch_count + 1, file_path))
+                heapq.heappush(top_models, (metric_scalar, epoch_count, file_path))
                 self._save_checkpoint(file_path, model, optimizer, scaler, epoch_count)
         return top_models
 
-    @torch.no_grad()
-    def _load_data_batch(
-        self, data_module: DataModule, stage: Literal["train", "trainedit", "test", "val"]
-    ) -> Iterable[tuple[Any]]:
-        dataset: Dataset = data_module.__getattribute__(f"{stage}set")
-        dataset = ConcatDataset(dataset.values())
-        dataloader: DataLoader = data_module.__getattribute__(f"{stage}_loader")(dataset, ddp=self.ngpu > 1)
-        yield next(iter(dataloader))
-
     @torch.inference_mode()
-    def val(self, model: nn.Module, data_module: DataModule, validator) -> None:
+    def val(
+        self,
+        model: ModelModule,
+        data_module: DataModule,
+        validator: STRValidator,
+    ) -> None:
 
         # Datasets & DataLoader
         valsets = data_module.valset
         valsets = ConcatDataset(valsets.values())
         val_loader = data_module.val_loader(valsets, ddp=self.ngpu > 1)
 
-        # Model
-        model = DDP(model, device_ids=[self.local_rank])
-        model.eval()
+        metric_name = validator.metric_name
+        avg_metric = []
 
-        val_criterion = validator
-        avg_acc = []
+        val_pbar = tqdm(
+            val_loader,
+            desc=f"Eval",
+            colour="yellow",
+            disable=not self.enable_log,
+        )
+        for val_batch in val_pbar:
+            metric: float = self._val_batch(model, val_batch, validator)
+            avg_metric.append(metric)
 
-        for epoch_count in range(self.num_epochs):
-            self._record_text_log("info", f"Epoch {epoch_count + 1} / {self.num_epochs}")
-            val_pbar = tqdm(
-                val_loader,
-                desc=f"Eval",
-                colour="yellow",
-                disable=not self.enable_log,
-            )
-            for val_batch in val_pbar:
-                val_batch = self._to_device(val_batch)
-                accuracy: float = self._val_batch(model, val_batch, val_criterion)
-                avg_acc.append(accuracy)
+        avg_metric = sum(avg_metric) / len(avg_metric)
+        self._record_text_log("info", f"{metric_name}: {avg_metric:.4f}")
 
-            avg_acc = sum(avg_acc) / len(avg_acc)
-            self._record_text_log("info", f"accuracy: {avg_acc:.4f}")
-            self._record_scalar("Eval/accuracy", avg_acc, epoch_count)
-
-    def train_with_val(self, model: nn.Module, data_module: DataModule, loss_module: LossModule, validator) -> None:
+    def train_with_val(
+        self,
+        model: ModelModule,
+        data_module: DataModule,
+        loss_module: STRCriterion,
+        validator: STRValidator,
+    ) -> None:
 
         # Datasets & DataLoader
         trainsets = data_module.trainset
@@ -178,14 +187,9 @@ class Trainer:
         train_loader = data_module.train_loader(trainsets, ddp=self.ngpu > 1)
         val_loader = data_module.val_loader(valsets, ddp=self.ngpu > 1)
 
-        # Model
-        model = DDP(model, device_ids=[self.local_rank])
-        model.train()
-
         # Optimizer & Losses
-        optimizer = optim.Adam(model.parameters(), lr=self.init_lr)
-        criterion = loss_module.__getattribute__(self.loss_type)
-        val_criterion = validator
+        optimizer = optim.Adam(model.parameters, lr=self.init_lr)
+        metric_name = validator.metric_name
 
         # AMP
         scaler = GradScaler()
@@ -193,27 +197,25 @@ class Trainer:
         # Record metrics
         top_models = []
         avg_loss = []
-        avg_acc = []
+        avg_metric = []
 
         for epoch_count in range(self.num_epochs):
-            self._record_text_log("info", f"Epoch {epoch_count + 1} / {self.num_epochs}")
+            self._record_text_log("info", f"Epoch [{epoch_count + 1} / {self.num_epochs}]")
             train_pbar = tqdm(
                 train_loader,
-                desc=f"Epoch [{epoch_count + 1}]",
+                desc=f"Epoch [{epoch_count + 1}/{self.num_epochs}]",
                 colour="green",
                 disable=not self.enable_log,
             )
             for train_batch in train_pbar:
-                train_batch = self._to_device(train_batch)
-
                 optimizer.zero_grad()
-                loss: torch.Tensor = self._train_batch(model, train_batch, criterion)
-
+                loss: torch.Tensor = self._train_batch(model, train_batch, loss_module)
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
 
                 avg_loss.append(loss.item())
+                train_pbar.set_postfix({"loss": f"{loss.item():.6f}"})
 
             avg_loss = sum(avg_loss) / len(avg_loss)
             self._record_text_log("info", f"loss: {avg_loss:.6f}")
@@ -226,15 +228,16 @@ class Trainer:
                 disable=not self.enable_log,
             )
             for val_batch in val_pbar:
-                val_batch = self._to_device(val_batch)
-                accuracy: float = self._val_batch(model, val_batch, val_criterion)
-                avg_acc.append(accuracy)
+                metric: float = self._val_batch(model, val_batch, validator)
+                avg_metric.append(metric)
 
-            avg_acc = sum(avg_acc) / len(avg_acc)
-            self._record_text_log("info", f"accuracy: {avg_acc:.4f}")
-            self._record_scalar("Train/accuracy", avg_acc, epoch_count)
+            avg_metric = sum(avg_metric) / len(avg_metric)
+            self._record_text_log("info", f"{metric_name}: {avg_metric:.4f}")
+            self._record_scalar(f"Train/{metric_name}", avg_metric, epoch_count)
 
-            top_models = self._save_topk(top_models, avg_acc, epoch_count, model, optimizer, scaler)
+            top_models = self._save_topk(top_models, avg_metric, epoch_count, model, optimizer, scaler)
+
+        self._finish_train()
 
     @torch.inference_mode()
     def vlm_api_validation_baseline(
